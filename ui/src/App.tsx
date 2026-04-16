@@ -2,10 +2,10 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { render, Box, Text } from 'ink';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 
-import { 
-  AgentState, 
-  MessageEntry, 
-  ToolBlockEntry 
+import {
+  AgentState,
+  MessageEntry,
+  ToolBlockEntry
 } from './types';
 
 import { AgentBanner } from './components/AgentBanner';
@@ -85,9 +85,29 @@ const App = () => {
   }, [scheduleFlush]);
 
   useEffect(() => {
+    const preferredPython = process.env.PYTHON_BIN?.trim();
+    const pythonExecutable =
+      preferredPython && preferredPython.length > 0
+        ? preferredPython
+        : process.platform === 'win32'
+          ? 'python'
+          : 'python3';
+
     // Spawn python agent unbuffered
-    processRef.current = spawn('python3', ['-u', '../agent.py'], {
+    processRef.current = spawn(pythonExecutable, ['-u', '../agent.py'], {
       stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    processRef.current.on('error', (err: Error) => {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString() + Math.random().toString(),
+          kind: 'status',
+          text: `Failed to launch ${pythonExecutable}. Set PYTHON_BIN or ensure Python is on PATH. ${err.message}`,
+        },
+      ]);
+      setAgentState('waiting_input');
     });
 
     let buffer = '';
@@ -95,14 +115,14 @@ const App = () => {
     const handleData = (data: Buffer) => {
       const text = data.toString('utf8');
       buffer += text;
-      
+
       let newlineIdx;
       while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
         const rawLine = buffer.slice(0, newlineIdx);
         buffer = buffer.slice(newlineIdx + 1);
         processLine(rawLine);
       }
-      
+
       // If the buffer ends with "You:: " without a newline, input() doesn't send newline.
       const cleanBuffer = stripAnsi(buffer).trim();
       if (cleanBuffer === 'You::' || cleanBuffer === 'You:') {
@@ -114,7 +134,7 @@ const App = () => {
     if (processRef.current.stdout) {
       processRef.current.stdout.on('data', handleData);
     }
-    
+
     // Also capture stderr
     if (processRef.current.stderr) {
       processRef.current.stderr.on('data', handleData);
@@ -129,7 +149,7 @@ const App = () => {
 
   const processLine = (rawLine: string) => {
     const line = stripAnsi(rawLine).trimEnd();
-    
+
     if (!line) return;
 
     // Detect Input Prompt in a printed line (sometimes it flushes with newline)
@@ -149,14 +169,14 @@ const App = () => {
         // End of block
         isReadingToolRef.current = false;
         const argsStr = currentToolArgsRef.current.join('\n');
-        
+
         const newTool: ToolBlockEntry = {
           id: currentToolIdRef.current,
           kind: 'tool',
           toolName: currentToolNameRef.current,
           argsString: argsStr,
         };
-        
+
         queueAppend(newTool);
         currentToolArgsRef.current = [];
         return;
@@ -192,7 +212,7 @@ const App = () => {
       const idx = line.indexOf(':');
       let text = line.substring(idx + 1).trim();
       if (text.startsWith(':')) {
-         text = text.substring(1).trim();
+        text = text.substring(1).trim();
       }
       queueAppend({ id: Date.now().toString() + Math.random().toString(), kind: 'agent', text });
       queueState('waiting_input');
@@ -213,9 +233,9 @@ const App = () => {
       ...prev,
       { id: Date.now().toString() + Math.random().toString(), kind: 'user', text },
     ]);
-    
+
     setAgentState('thinking');
-    
+
     if (processRef.current && processRef.current.stdin) {
       processRef.current.stdin.write(text + '\n');
     }
@@ -224,7 +244,7 @@ const App = () => {
   return (
     <Box flexDirection="column" width="100%">
       <AgentBanner />
-      
+
       <Box flexDirection="column" marginTop={1}>
         {messages.map((m) => {
           if (m.kind === 'user') return <UserMessage key={m.id} text={m.text} />;
