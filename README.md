@@ -1,6 +1,7 @@
 # Apek — Coding Agent
 
 ---
+
 ## Preview
 
 <img src="./public/preview.png" alt="preview_terminal">
@@ -125,6 +126,24 @@ export PYTHON_BIN=python3
 $env:PYTHON_BIN = "py"
 ```
 
+### Projects root path
+
+By default, the agent uses this resolution order for project files:
+
+1. `APEK_PROJECTS_ROOT` (or `PROJECTS_ROOT`) if set
+2. `/projects`
+3. `~/projects` (fallback if `/projects` is not writable)
+
+To force your preferred path (example: `/home/prawesh/projects`):
+
+```bash
+export APEK_PROJECTS_ROOT=/home/prawesh/projects
+```
+
+Windows PowerShell:
+
+```powershell
+$env:APEK_PROJECTS_ROOT = "C:\\Users\\<you>\\projects"
+```
+
 ---
-
-
