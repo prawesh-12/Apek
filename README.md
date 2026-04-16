@@ -1,4 +1,4 @@
-# Apex — Coding Agent
+# Apek — Coding Agent
 
 ---
 ## Preview
