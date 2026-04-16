@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { render, Box, Text } from 'ink';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { render, Box, Static } from 'ink';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 
 import {
@@ -18,55 +18,112 @@ import { UserInput } from './components/UserInput';
 
 const stripAnsi = (str: string) => str.replace(/\x1B\[[0-9;]*m/g, '');
 
+type UiState = {
+  agentState: AgentState;
+  messages: MessageEntry[];
+};
+
+type PendingMessageOp = MessageEntry & { _op: 'append' };
+
+type PendingToolBlock = {
+  id: string;
+  toolName: string;
+  argsString: string;
+};
+
+type StaticFeedItem =
+  | { id: 'banner'; kind: 'banner' }
+  | { id: string; kind: 'message'; entry: MessageEntry };
+
+const renderMessage = (message: MessageEntry) => {
+  if (message.kind === 'user') return <UserMessage text={message.text} />;
+  if (message.kind === 'agent') return <AgentMessage text={message.text} />;
+  if (message.kind === 'tool') return <ToolBlock data={message} />;
+  if (message.kind === 'status') return <StatusMessage text={message.text} />;
+  return null;
+};
+
 const App = () => {
-  const [agentState, setAgentState] = useState<AgentState>('thinking');
-  const [messages, setMessages] = useState<MessageEntry[]>([]);
+  const [uiState, setUiState] = useState<UiState>({
+    agentState: 'thinking',
+    messages: [],
+  });
+  const { agentState, messages } = uiState;
+
   const processRef = useRef<ChildProcessWithoutNullStreams | null>(null);
+  const agentStateRef = useRef<AgentState>('thinking');
+  const nextMessageIdRef = useRef(1);
 
   // State to handle multi-line tool block reading
   const isReadingToolRef = useRef(false);
   const currentToolNameRef = useRef('');
   const currentToolArgsRef = useRef<string[]>([]);
   const currentToolIdRef = useRef('');
+  const pendingToolBlockRef = useRef<PendingToolBlock | null>(null);
+  const staticBannerItemRef = useRef<StaticFeedItem>({ id: 'banner', kind: 'banner' });
 
   // Pending messages queue -> flushed in one batch per data chunk (one frame debounce)
   // to avoid per line re-renders which cause scroll jumps and flicker.
-  const pendingMessagesRef = useRef<MessageEntry[]>([]);
+  const pendingMessagesRef = useRef<PendingMessageOp[]>([]);
   const pendingStateRef = useRef<AgentState | null>(null);
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  useEffect(() => {
+    agentStateRef.current = agentState;
+  }, [agentState]);
+
+  const createMessageId = useCallback(() => {
+    const id = nextMessageIdRef.current;
+    nextMessageIdRef.current += 1;
+    return `msg_${id}`;
+  }, []);
+
   const scheduleFlush = useCallback(() => {
-    if (flushTimerRef.current) return; // already scheduled
+    if (flushTimerRef.current) return;
+
     flushTimerRef.current = setTimeout(() => {
       flushTimerRef.current = null;
-      const pending = pendingMessagesRef.current;
-      const nextState = pendingStateRef.current;
+
+      const pendingOps = pendingMessagesRef.current;
+      const queuedState = pendingStateRef.current;
       pendingMessagesRef.current = [];
       pendingStateRef.current = null;
 
-      if (pending.length > 0) {
-        setMessages((prev) => {
-          let next = [...prev];
-          for (const msg of pending) {
-            if (msg._op === 'append') {
-              next = [...next, msg];
-            } else if (msg._op === 'updateLastTool') {
-              for (let i = next.length - 1; i >= 0; i--) {
-                if (next[i].kind === 'tool') {
-                  const tool = { ...(next[i] as ToolBlockEntry) };
-                  tool.resultString = msg.resultString;
-                  tool.isError = msg.isError;
-                  next[i] = tool;
-                  break;
-                }
-              }
+      if (pendingOps.length === 0 && queuedState === null) return;
+
+      setUiState((prev) => {
+        let nextMessages = prev.messages;
+        let messagesChanged = false;
+
+        for (const op of pendingOps) {
+          if (op._op === 'append') {
+            if (!messagesChanged) {
+              nextMessages = [...nextMessages];
+              messagesChanged = true;
             }
+
+            const { _op, ...message } = op;
+            nextMessages.push(message as MessageEntry);
           }
-          return next;
-        });
-      }
-      if (nextState) setAgentState(nextState);
-    }, 16); // one frame -> batch everything from the same data chunk
+        }
+
+        const nextAgentState = queuedState ?? prev.agentState;
+        const stateChanged = nextAgentState !== prev.agentState;
+
+        if (!messagesChanged && !stateChanged) {
+          return prev;
+        }
+
+        if (stateChanged) {
+          agentStateRef.current = nextAgentState;
+        }
+
+        return {
+          messages: messagesChanged ? nextMessages : prev.messages,
+          agentState: nextAgentState,
+        };
+      });
+    }, 16);
   }, []);
 
   const queueAppend = useCallback((msg: MessageEntry) => {
@@ -74,13 +131,11 @@ const App = () => {
     scheduleFlush();
   }, [scheduleFlush]);
 
-  const queueUpdateLastTool = useCallback((resultString: string, isError: boolean) => {
-    pendingMessagesRef.current.push({ _op: 'updateLastTool', resultString, isError } as any);
-    scheduleFlush();
-  }, [scheduleFlush]);
+  const queueState = useCallback((nextState: AgentState) => {
+    const effectiveState = pendingStateRef.current ?? agentStateRef.current;
+    if (effectiveState === nextState) return;
 
-  const queueState = useCallback((s: AgentState) => {
-    pendingStateRef.current = s;
+    pendingStateRef.current = nextState;
     scheduleFlush();
   }, [scheduleFlush]);
 
@@ -93,27 +148,127 @@ const App = () => {
           ? 'python'
           : 'python3';
 
-    // Spawn python agent unbuffered
     processRef.current = spawn(pythonExecutable, ['-u', '../agent.py'], {
       stdio: ['pipe', 'pipe', 'pipe']
     });
 
     processRef.current.on('error', (err: Error) => {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: Date.now().toString() + Math.random().toString(),
-          kind: 'status',
-          text: `Failed to launch ${pythonExecutable}. Set PYTHON_BIN or ensure Python is on PATH. ${err.message}`,
-        },
-      ]);
-      setAgentState('waiting_input');
+      queueAppend({
+        id: createMessageId(),
+        kind: 'status',
+        text: `Failed to launch ${pythonExecutable}. Set PYTHON_BIN or ensure Python is on PATH. ${err.message}`,
+      });
+      queueState('waiting_input');
     });
 
     let buffer = '';
 
+    const processLine = (rawLine: string) => {
+      const line = stripAnsi(rawLine).trimEnd();
+      if (!line) return;
+
+      if (line.includes('You::') || line.includes('You:')) {
+        queueState('waiting_input');
+        if (line.trim() === 'You::' || line.trim() === 'You:') {
+          return;
+        }
+      }
+
+      if (isReadingToolRef.current) {
+        queueState('tool_running');
+        if (line.includes('└─')) {
+          isReadingToolRef.current = false;
+          const argsStr = currentToolArgsRef.current.join('\n');
+
+          const newTool: PendingToolBlock = {
+            id: currentToolIdRef.current,
+            toolName: currentToolNameRef.current,
+            argsString: argsStr,
+          };
+
+          pendingToolBlockRef.current = newTool;
+          currentToolArgsRef.current = [];
+          return;
+        }
+
+        if (line.startsWith('│')) {
+          const content = line.substring(1).trim();
+          currentToolArgsRef.current.push(content);
+          return;
+        }
+      }
+
+      if (line.includes('┌── Tool Execution:')) {
+        if (pendingToolBlockRef.current) {
+          queueAppend({
+            id: pendingToolBlockRef.current.id,
+            kind: 'tool',
+            toolName: pendingToolBlockRef.current.toolName,
+            argsString: pendingToolBlockRef.current.argsString,
+            resultString: '{"error":"Tool finished without explicit Tool Result output"}',
+            isError: true,
+          });
+          pendingToolBlockRef.current = null;
+        }
+
+        isReadingToolRef.current = true;
+        currentToolNameRef.current = line.split('Tool Execution:')[1].trim();
+        currentToolIdRef.current = createMessageId();
+        currentToolArgsRef.current = [];
+        queueState('tool_running');
+        return;
+      }
+
+      if (line.includes('Tool Result:')) {
+        const resultText = line.split('Tool Result:')[1].trim();
+        const isError = resultText.includes('"error"');
+
+        if (pendingToolBlockRef.current) {
+          const finalizedTool: ToolBlockEntry = {
+            id: pendingToolBlockRef.current.id,
+            kind: 'tool',
+            toolName: pendingToolBlockRef.current.toolName,
+            argsString: pendingToolBlockRef.current.argsString,
+            resultString: resultText,
+            isError,
+          };
+          queueAppend(finalizedTool);
+          pendingToolBlockRef.current = null;
+        } else {
+          queueAppend({
+            id: createMessageId(),
+            kind: 'status',
+            text: `Tool result arrived without tool header: ${resultText}`,
+          });
+        }
+
+        queueState('thinking');
+        return;
+      }
+
+      if (line.startsWith('Apek:') || line.startsWith('Assistant:')) {
+        const idx = line.indexOf(':');
+        let text = line.substring(idx + 1).trim();
+        if (text.startsWith(':')) {
+          text = text.substring(1).trim();
+        }
+        queueAppend({ id: createMessageId(), kind: 'agent', text });
+        queueState('waiting_input');
+        return;
+      }
+
+      if (line.startsWith('Status:')) {
+        let text = line.substring('Status:'.length).trim();
+        if (text.startsWith(':')) text = text.substring(1).trim();
+        queueAppend({ id: createMessageId(), kind: 'status', text });
+      }
+    };
+
     const handleData = (data: Buffer) => {
-      const text = data.toString('utf8');
+      const text = data
+        .toString('utf8')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n');
       buffer += text;
 
       let newlineIdx;
@@ -123,11 +278,10 @@ const App = () => {
         processLine(rawLine);
       }
 
-      // If the buffer ends with "You:: " without a newline, input() doesn't send newline.
       const cleanBuffer = stripAnsi(buffer).trim();
       if (cleanBuffer === 'You::' || cleanBuffer === 'You:') {
-        setAgentState('waiting_input');
-        buffer = ''; // clear it so we don't process it infinitely
+        queueState('waiting_input');
+        buffer = '';
       }
     };
 
@@ -135,131 +289,70 @@ const App = () => {
       processRef.current.stdout.on('data', handleData);
     }
 
-    // Also capture stderr
     if (processRef.current.stderr) {
       processRef.current.stderr.on('data', handleData);
     }
 
     return () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+        flushTimerRef.current = null;
+      }
       if (processRef.current) {
         processRef.current.kill();
       }
     };
-  }, []);
+  }, [createMessageId, queueAppend, queueState]);
 
-  const processLine = (rawLine: string) => {
-    const line = stripAnsi(rawLine).trimEnd();
+  const handleSubmit = useCallback((text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
 
-    if (!line) return;
+    setUiState((prev) => {
+      const nextAgentState: AgentState = 'thinking';
+      agentStateRef.current = nextAgentState;
 
-    // Detect Input Prompt in a printed line (sometimes it flushes with newline)
-    if (line.includes('You::') || line.includes('You:')) {
-      // It's just a prompt
-      setAgentState('waiting_input');
-      // If the line only contains the prompt, we don't process further
-      if (line.trim() === 'You::' || line.trim() === 'You:') {
-        return;
-      }
-    }
-
-    // Is it reading a multi-line tool block?
-    if (isReadingToolRef.current) {
-      queueState('tool_running');
-      if (line.includes('└─')) {
-        // End of block
-        isReadingToolRef.current = false;
-        const argsStr = currentToolArgsRef.current.join('\n');
-
-        const newTool: ToolBlockEntry = {
-          id: currentToolIdRef.current,
-          kind: 'tool',
-          toolName: currentToolNameRef.current,
-          argsString: argsStr,
-        };
-
-        queueAppend(newTool);
-        currentToolArgsRef.current = [];
-        return;
-      } else if (line.startsWith('│')) {
-        // Collect args line
-        const content = line.substring(1).trim(); // remove '│' prefix
-        currentToolArgsRef.current.push(content);
-        return;
-      }
-    }
-
-    // 1. TOOL EXECUTION BLOCK
-    if (line.includes('┌── Tool Execution:')) {
-      isReadingToolRef.current = true;
-      currentToolNameRef.current = line.split('Tool Execution:')[1].trim();
-      currentToolIdRef.current = Date.now().toString() + Math.random().toString();
-      currentToolArgsRef.current = [];
-      queueState('tool_running');
-      return;
-    }
-
-    // 2. TOOL RESULT
-    if (line.includes('Tool Result:')) {
-      const resultText = line.split('Tool Result:')[1].trim();
-      const isError = resultText.includes('"error"');
-      queueUpdateLastTool(resultText, isError);
-      queueState('thinking');
-      return;
-    }
-
-    // 3. AGENT RESPONSE
-    if (line.startsWith('Apek:') || line.startsWith('Assistant:')) {
-      const idx = line.indexOf(':');
-      let text = line.substring(idx + 1).trim();
-      if (text.startsWith(':')) {
-        text = text.substring(1).trim();
-      }
-      queueAppend({ id: Date.now().toString() + Math.random().toString(), kind: 'agent', text });
-      queueState('waiting_input');
-      return;
-    }
-
-    // 4. STATUS MESSAGES
-    if (line.startsWith('Status:')) {
-      let text = line.substring('Status:'.length).trim();
-      if (text.startsWith(':')) text = text.substring(1).trim();
-      queueAppend({ id: Date.now().toString() + Math.random().toString(), kind: 'status', text });
-      return;
-    }
-  };
-
-  const handleSubmit = (text: string) => {
-    setMessages((prev) => [
-      ...prev,
-      { id: Date.now().toString() + Math.random().toString(), kind: 'user', text },
-    ]);
-
-    setAgentState('thinking');
+      return {
+        agentState: nextAgentState,
+        messages: [...prev.messages, { id: createMessageId(), kind: 'user', text: trimmed }],
+      };
+    });
 
     if (processRef.current && processRef.current.stdin) {
-      processRef.current.stdin.write(text + '\n');
+      processRef.current.stdin.write(trimmed + '\n');
     }
-  };
+  }, [createMessageId]);
+
+  const staticFeedItems = useMemo<StaticFeedItem[]>(() => {
+    return [
+      staticBannerItemRef.current,
+      ...messages.map((entry) => ({
+        id: entry.id,
+        kind: 'message' as const,
+        entry,
+      })),
+    ];
+  }, [messages]);
 
   return (
     <Box flexDirection="column" width="100%">
-      <AgentBanner />
-
-      <Box flexDirection="column" marginTop={1}>
-        {messages.map((m) => {
-          if (m.kind === 'user') return <UserMessage key={m.id} text={m.text} />;
-          if (m.kind === 'agent') return <AgentMessage key={m.id} text={m.text} />;
-          if (m.kind === 'tool') return <ToolBlock key={m.id} data={m} />;
-          if (m.kind === 'status') return <StatusMessage key={m.id} text={m.text} />;
-          return null;
-        })}
+      <Box flexDirection="column">
+        <Static items={staticFeedItems}>
+          {(item) => (
+            <Box key={item.id} flexDirection="column" width="100%">
+              {item.kind === 'banner' ? <AgentBanner /> : renderMessage(item.entry)}
+            </Box>
+          )}
+        </Static>
       </Box>
 
-      {agentState === 'thinking' || agentState === 'tool_running' ? (
-        <ThinkingSpinner />
-      ) : (
-        <UserInput onSubmit={handleSubmit} />
-      )}
+      <Box minHeight={4}>
+        {agentState === 'thinking' || agentState === 'tool_running' ? (
+          <ThinkingSpinner />
+        ) : (
+          <UserInput onSubmit={handleSubmit} />
+        )}
+      </Box>
     </Box>
   );
 };

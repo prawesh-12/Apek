@@ -5,7 +5,7 @@ interface AgentMessageProps {
   text: string;
 }
 
-export const AgentMessage: React.FC<AgentMessageProps> = ({ text }) => {
+const AgentMessageComponent: React.FC<AgentMessageProps> = ({ text }) => {
   const cleanedText = text.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27FF}]/gu, '').trim();
 
   return (
@@ -17,3 +17,5 @@ export const AgentMessage: React.FC<AgentMessageProps> = ({ text }) => {
     </Box>
   );
 };
+
+export const AgentMessage = React.memo(AgentMessageComponent);

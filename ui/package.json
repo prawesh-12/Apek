@@ -1,5 +1,5 @@
 {
-  "name": "Apex Coding Agent - ui",
+  "name": "apex-coding-agent-ui",
   "version": "1.0.0",
   "type": "module",
   "keywords": [],
@@ -8,6 +8,7 @@
   "description": "",
   "dependencies": {
     "chalk": "^4.1.2",
+    "clipboardy": "^4.0.0",
     "ink": "^6.8.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",

@@ -5,7 +5,7 @@ interface StatusMessageProps {
   text: string;
 }
 
-export const StatusMessage: React.FC<StatusMessageProps> = ({ text }) => {
+const StatusMessageComponent: React.FC<StatusMessageProps> = ({ text }) => {
   return (
     <Box marginY={1}>
       <Text color="yellow">▲ </Text>
@@ -13,3 +13,5 @@ export const StatusMessage: React.FC<StatusMessageProps> = ({ text }) => {
     </Box>
   );
 };
+
+export const StatusMessage = React.memo(StatusMessageComponent);

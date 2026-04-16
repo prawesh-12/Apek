@@ -6,12 +6,12 @@ interface ToolBlockProps {
   data: ToolBlockEntry;
 }
 
-export const ToolBlock: React.FC<ToolBlockProps> = ({ data }) => {
+const ToolBlockComponent: React.FC<ToolBlockProps> = ({ data }) => {
   // Parse args string for preview mapping
   let argsObj: any = {};
   try {
     argsObj = JSON.parse(data.argsString);
-  } catch (e) {}
+  } catch (e) { }
 
   let previewNode: React.ReactNode = null;
 
@@ -54,7 +54,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({ data }) => {
       </Box>
 
       {previewNode}
-      
+
       {data.resultString && (() => {
         let isErr = data.isError;
         let displayResult = data.resultString;
@@ -85,7 +85,7 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({ data }) => {
             const chars = resObj.content ? resObj.content.length : 0;
             displayResult = `read ${resObj.file_path}  (${chars} chars)`;
           }
-        } catch (e) {}
+        } catch (e) { }
 
         return (
           <Box marginTop={1}>
@@ -101,3 +101,5 @@ export const ToolBlock: React.FC<ToolBlockProps> = ({ data }) => {
     </Box>
   );
 };
+
+export const ToolBlock = React.memo(ToolBlockComponent);

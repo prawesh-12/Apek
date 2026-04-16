@@ -97,6 +97,12 @@ chmod +x start.sh
 ./start.sh
 ```
 
+Each `./start.sh` run creates one timestamped debug trace at:
+
+`error-logs/run_YYYYMMDD_HHMMSS_RANDOM.txt`
+
+This file includes timestamps plus detailed runtime events (user inputs, model responses, tool calls, tool results, and API request/response tracing).
+
 ### Windows (PowerShell or CMD)
 
 ```bash

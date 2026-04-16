@@ -3,14 +3,14 @@ import { Box, Text } from 'ink';
 import fs from 'fs';
 import path from 'path';
 
-export const AgentBanner = () => {
+const AgentBannerComponent: React.FC = () => {
   const modelName = useMemo(() => {
     try {
       const envPath = path.resolve(process.cwd(), '../.env');
       const envContent = fs.readFileSync(envPath, 'utf8');
       const match = envContent.match(/OLLAMA_MODEL=(.*)/);
       if (match) return match[1].trim();
-    } catch (e) {}
+    } catch (e) { }
     return 'Unknown Model';
   }, []);
 
@@ -39,3 +39,5 @@ export const AgentBanner = () => {
     </Box>
   );
 };
+
+export const AgentBanner = React.memo(AgentBannerComponent);

@@ -109,18 +109,130 @@ def looks_like_deferred_work_message(text: str) -> bool:
 	  4. Under 400 chars — covers multi-sentence planning narration but not a
 	     genuine multi-paragraph technical explanation.
 	"""
-	if "tool:" in text:
+	if re.search(r"\btool\s*:", text, re.IGNORECASE):
 		return False
+
+	# Normalize smart punctuation and whitespace so variants like “I’ll” are caught.
+	normalized = (
+		text.replace("\u2019", "'")
+		.replace("\u2018", "'")
+		.replace("\u201c", '"')
+		.replace("\u201d", '"')
+	)
+	normalized = re.sub(r"\s+", " ", normalized).strip()
+	lower = normalized.lower()
+
+	# Remove common conversational fillers that can precede a deferred action line.
+	lower = re.sub(r"^(okay|ok|sure|alright|great|got it|sounds good)[,!.\s:-]+", "", lower)
+
 	# Must start with a deferral phrase
-	if not re.search(r"^\s*(i\s*will|i\s*'?ll|let me|starting now|on it|right away)\b", text, re.IGNORECASE):
+	if not re.search(
+		r"^(i\s*(will|'?ll|am\s+going\s+to)|let\s+me|starting\s+now|on\s+it|right\s+away|first\s*,?\s*i\s*(will|'?ll))\b",
+		lower,
+		re.IGNORECASE,
+	):
 		return False
 	# Actual code block = real content, not deferral
-	if "```" in text:
+	if "```" in normalized:
 		return False
 	# Long enough to be a real explanation -> not a deferral
-	if len(text.strip()) > 400:
+	if len(normalized) > 400:
 		return False
 	return True
+
+
+def contains_fenced_code_block(text: str) -> bool:
+	"""Return True if response includes at least one fenced code block."""
+	return bool(re.search(r"```[A-Za-z0-9_+-]*\n.*?```", text, re.DOTALL))
+
+
+def user_likely_requested_filesystem_action(user_text: str) -> bool:
+	"""
+	Heuristic: detect requests that likely require creating/editing files.
+	"""
+	normalized = re.sub(r"\s+", " ", user_text).strip().lower()
+	if not normalized:
+		return False
+
+	action_match = re.search(
+		r"\b(create|build|make|write|edit|update|modify|save|add|implement|generate|scaffold)\b",
+		normalized,
+	)
+	target_match = re.search(
+		r"\b(file|folder|directory|project|app|page|component|script|html|css|js|json|python|py|readme)\b|(?:[a-z0-9._-]+\.[a-z0-9]{1,8}\b)",
+		normalized,
+	)
+
+	return bool(action_match and target_match)
+
+
+def extract_fenced_tool_invocations_without_prefix(text: str) -> List[Tuple[str, Dict[str, Any]]]:
+	"""
+	Recover tool calls from fenced blocks when the model omitted the `tool:` prefix.
+
+	Accepted forms inside fenced code:
+	  - tool: create_directory({"path": "demo"})
+	  - create_directory({"path": "demo"})
+	"""
+
+	def parse_candidate_line(candidate: str) -> Tuple[str, Dict[str, Any]] | None:
+		match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", candidate)
+		if not match:
+			return None
+
+		name = match.group(1)
+		json_start = match.end()
+		while json_start < len(candidate) and candidate[json_start].isspace():
+			json_start += 1
+
+		parsed_args = parse_json_args_maybe_relaxed(candidate[json_start:])
+		if parsed_args is None:
+			return None
+
+		args, consumed_json = parsed_args
+		pos = json_start + consumed_json
+
+		while pos < len(candidate) and candidate[pos].isspace():
+			pos += 1
+		if pos >= len(candidate) or candidate[pos] != ")":
+			return None
+		pos += 1
+
+		while pos < len(candidate) and candidate[pos].isspace():
+			pos += 1
+		if pos < len(candidate) and candidate[pos] == ";":
+			pos += 1
+
+		while pos < len(candidate) and candidate[pos].isspace():
+			pos += 1
+		if pos != len(candidate):
+			return None
+
+		return name, args
+
+	recovered: List[Tuple[str, Dict[str, Any]]] = []
+	fenced_blocks = re.findall(r"```[A-Za-z0-9_+-]*\n(.*?)```", text, re.DOTALL)
+
+	for block in fenced_blocks:
+		for raw_line in block.splitlines():
+			line = raw_line.strip()
+			if not line:
+				continue
+
+			candidate = line
+			tool_prefix = re.match(r"^tool\s*:\s*", candidate, re.IGNORECASE)
+			if tool_prefix:
+				candidate = candidate[tool_prefix.end():].strip()
+
+			# Ignore shell commands and prose; only accept direct function-call lines.
+			if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*\s*\(.*\)\s*;?", candidate):
+				continue
+
+			parsed = parse_candidate_line(candidate)
+			if parsed is not None:
+				recovered.append(parsed)
+
+	return recovered
 
 
 def extract_tool_invocations(text: str) -> List[Tuple[str, Dict[str, Any]]]:
@@ -129,8 +241,8 @@ def extract_tool_invocations(text: str) -> List[Tuple[str, Dict[str, Any]]]:
 	This parser tolerates extra text before/after tool calls on the same line.
 	"""
 
-	def parse_tool_call_at(line: str, start_idx: int) -> Tuple[str, Dict[str, Any], int] | None:
-		segment = line[start_idx + len("tool:") :]
+	def parse_tool_call_at(line: str, segment_start: int) -> Tuple[str, Dict[str, Any], int] | None:
+		segment = line[segment_start:]
 		match = re.match(r"\s*([A-Za-z_][A-Za-z0-9_]*)\s*\(", segment)
 		if not match:
 			return None
@@ -151,7 +263,7 @@ def extract_tool_invocations(text: str) -> List[Tuple[str, Dict[str, Any]]]:
 		if pos >= len(segment) or segment[pos] != ")":
 			return None
 
-		consumed_chars = len("tool:") + pos + 1
+		consumed_chars = pos + 1
 		return name, args, consumed_chars
 
 	invocations = []
@@ -183,17 +295,19 @@ def extract_tool_invocations(text: str) -> List[Tuple[str, Dict[str, Any]]]:
 		line = raw_line.strip()
 		search_start = 0
 		while True:
-			idx = line.find("tool:", search_start)
-			if idx == -1:
+			match = re.search(r"\btool\s*:\s*", line[search_start:], re.IGNORECASE)
+			if match is None:
 				break
 
-			parsed = parse_tool_call_at(line, idx)
+			segment_start = search_start + match.end()
+
+			parsed = parse_tool_call_at(line, segment_start)
 			if parsed is None:
-				search_start = idx + len("tool:")
+				search_start = segment_start
 				continue
 
 			name, args, consumed = parsed
 			invocations.append((name, args))
-			search_start = idx + consumed
+			search_start = segment_start + consumed
 
 	return invocations

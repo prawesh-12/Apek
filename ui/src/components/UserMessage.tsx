@@ -5,7 +5,7 @@ interface UserMessageProps {
   text: string;
 }
 
-export const UserMessage: React.FC<UserMessageProps> = ({ text }) => {
+const UserMessageComponent: React.FC<UserMessageProps> = ({ text }) => {
   return (
     <Box marginY={1}>
       <Text color="cyanBright">❯ </Text>
@@ -13,3 +13,5 @@ export const UserMessage: React.FC<UserMessageProps> = ({ text }) => {
     </Box>
   );
 };
+
+export const UserMessage = React.memo(UserMessageComponent);
