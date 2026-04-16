@@ -1,6 +1,11 @@
 # Apex — Coding Agent
 
 ---
+## Preview
+
+<img src="./public/preview.png" alt="preview_terminal">
+
+---
 
 ## Prerequisites
 
