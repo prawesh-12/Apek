@@ -8,8 +8,13 @@ const AgentBannerComponent: React.FC = () => {
     try {
       const envPath = path.resolve(process.cwd(), '../.env');
       const envContent = fs.readFileSync(envPath, 'utf8');
-      const match = envContent.match(/OLLAMA_MODEL=(.*)/);
-      if (match) return match[1].trim();
+      const line = envContent.split('\n').find(
+        (l) => !l.trimStart().startsWith('#') && l.includes('OLLAMA_MODEL=')
+      );
+      if (line) {
+        const value = line.split('=').slice(1).join('=').trim();
+        if (value) return value;
+      }
     } catch (e) { }
     return 'Unknown Model';
   }, []);
