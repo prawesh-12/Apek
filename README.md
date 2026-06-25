@@ -1,10 +1,43 @@
 # Apek — Coding Agent
 
+**Apek** is an interactive, terminal-based AI coding assistant. It holds a conversation in your terminal, calls an LLM to reason about your request, and executes filesystem and shell operations to create, edit, and manage real code projects — all confined to a sandboxed projects directory for safety.
+
 ---
 
 ## Preview
 
 <img src="./public/preview.png" alt="preview_terminal">
+
+---
+
+## Features
+
+- **Interactive chat loop** — a continuous conversation with an AI coding agent.
+- **Tool-driven actions** — the agent can `read_file`, `list_files`, `edit_file`, `create_directory`, and `execute_command` to do real work.
+- **Sandboxed filesystem** — all file operations are restricted to a configurable projects root; `../` escapes and absolute paths outside the root are blocked.
+- **Safety rules** — no destructive commands (e.g. `rm`) without explicit user permission; the agent writes code but never starts dev servers.
+- **Rich terminal UI** — built with React + Ink, showing thinking state, messages, and formatted tool calls/results.
+- **Detailed debug logging** — every run writes a timestamped trace (user inputs, model responses, tool calls/results, and masked API traces) to `error-logs/`.
+
+---
+
+## How It Works
+
+The terminal UI (`ui/src/App.tsx`, React + Ink) spawns the Python backend (`agent.py`). User input flows to the backend, which builds a system prompt, calls the **Ollama API**, parses tool calls out of the model's response, dispatches them, and loops until the task is complete. Every session is traced to `error-logs/` for debugging.
+
+| File / Dir       | Role                                              |
+| ---------------- | ------------------------------------------------- |
+| `agent.py`       | Entry point                                       |
+| `agent_loop.py`  | Main conversation loop and tool dispatch          |
+| `llm_client.py`  | HTTP client for the Ollama API                    |
+| `tools.py`       | Filesystem/shell tools and sandbox enforcement    |
+| `parsing.py`     | Extracts tool calls from LLM output               |
+| `prompts.py`     | System prompt construction                        |
+| `config.py`      | Environment configuration                         |
+| `run_logger.py`  | Writes debug trace files                          |
+| `ui/`            | Ink-based React terminal UI                       |
+
+**Tech stack:** Python 3.10+ (standard library only) for the backend, React 19 + Ink + TypeScript (run via `tsx`) for the UI, and an Ollama-compatible LLM (e.g. Qwen3-Coder).
 
 ---
 
